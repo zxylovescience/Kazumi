@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:kazumi/services/plugin/cycani_api.dart';
 import 'package:kazumi/webview/video/video_webview_controller.dart';
 import 'package:kazumi/services/video_source/video_source_service.dart';
 
@@ -9,6 +11,15 @@ import 'package:kazumi/services/video_source/video_source_service.dart';
 /// WebView 实例在服务生命周期内复用，切换集数时调用 unloadPage 释放页面资源，
 /// 仅在 [dispose] 时才真正销毁 WebView。
 class WebViewVideoSourceService implements IVideoSourceService {
+  WebViewVideoSourceService({
+    CycaniApi? cycaniApi,
+    VideoWebviewController Function()? webviewFactory,
+  }) : _cycaniApi = cycaniApi ?? CycaniApi.instance,
+       _webviewFactory =
+           webviewFactory ?? VideoWebviewControllerFactory.getController;
+
+  final CycaniApi _cycaniApi;
+  final VideoWebviewController Function() _webviewFactory;
   VideoWebviewController? _webview;
   StreamSubscription? _logSubscription;
 
@@ -60,19 +71,41 @@ class WebViewVideoSourceService implements IVideoSourceService {
   }) async {
     request.throwIfNotCurrent(_activeRequest);
 
-    if (_webview == null) {
-      _webview = VideoWebviewControllerFactory.getController();
-      await _webview!.init();
-
-      _logSubscription = _webview!.onLog.listen((log) {
-        if (!_logController.isClosed) {
-          _logController.add(log);
-        }
-      });
-    }
-
     var didStartLoad = false;
     try {
+      // Resolve authenticated API entries before creating a page parser. The
+      // legacy Windows WebView can fail during initialization even though the
+      // account browser works; API playback does not need that WebView.
+      if (Platform.isWindows && CycaniApi.handlesPlayback(episodeUrl)) {
+        final cancelFuture = request.cancelled.then<String>((_) {
+          throw const VideoSourceCancelledException();
+        });
+        final media = await Future.any([
+          _cycaniApi.resolvePlayback(episodeUrl),
+          cancelFuture,
+        ]).timeout(timeout, onTimeout: () {
+          request.throwIfNotCurrent(_activeRequest);
+          throw VideoSourceTimeoutException(timeout);
+        });
+        request.throwIfNotCurrent(_activeRequest);
+        return VideoSource(
+          url: media,
+          offset: offset,
+          type: VideoSourceType.online,
+        );
+      }
+
+      if (_webview == null) {
+        _webview = _webviewFactory();
+        await _webview!.init();
+
+        _logSubscription = _webview!.onLog.listen((log) {
+          if (!_logController.isClosed) {
+            _logController.add(log);
+          }
+        });
+      }
+
       request.throwIfNotCurrent(_activeRequest);
       didStartLoad = true;
       await _webview!.loadUrl(

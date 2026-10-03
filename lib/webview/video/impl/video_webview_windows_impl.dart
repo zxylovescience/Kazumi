@@ -5,12 +5,14 @@ import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/network/proxy_utils.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/video_source/video_source_format.dart';
+import 'package:kazumi/services/plugin/cycani_api.dart';
 
 class VideoWebviewWindowsImpl
     extends VideoWebviewController<WebviewController> {
   final List<StreamSubscription> subscriptions = [];
 
   HeadlessWebview? headlessWebview;
+  int _loadRevision = 0;
 
   @override
   Future<void> init() async {
@@ -47,11 +49,28 @@ class VideoWebviewWindowsImpl
   Future<void> loadUrl(String url, bool useLegacyParser,
       {int offset = 0}) async {
     await unloadPage();
+    final revision = _loadRevision;
     count = 0;
     this.offset = offset;
     isIframeLoaded = false;
     isVideoSourceLoaded = false;
     videoLoadingEventController.add(true);
+    if (CycaniApi.handlesPlayback(url)) {
+      try {
+        final media = await CycaniApi.instance.resolvePlayback(url);
+        if (headlessWebview == null || revision != _loadRevision) return;
+        isIframeLoaded = true;
+        isVideoSourceLoaded = true;
+        videoLoadingEventController.add(false);
+        notifyVideoSourceResolved(media);
+      } catch (error) {
+        if (headlessWebview == null || revision != _loadRevision) return;
+        videoLoadingEventController.add(false);
+        logEventController.add(error.toString());
+        rethrow;
+      }
+      return;
+    }
     subscriptions.add(headlessWebview!.onM3USourceLoaded.listen((data) {
       if (headlessWebview == null) return;
       String url = data['url'] ?? '';
@@ -86,6 +105,7 @@ class VideoWebviewWindowsImpl
 
   @override
   Future<void> unloadPage() async {
+    _loadRevision++;
     for (final s in subscriptions) {
       try {
         s.cancel();
@@ -97,6 +117,7 @@ class VideoWebviewWindowsImpl
 
   @override
   Future<void> dispose() async {
+    _loadRevision++;
     for (final s in subscriptions) {
       try {
         s.cancel();

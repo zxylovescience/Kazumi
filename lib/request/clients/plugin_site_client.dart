@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:kazumi/request/core/dio_factory.dart';
 import 'package:kazumi/request/core/network_error_mapper.dart';
 import 'package:kazumi/utils/http_headers.dart';
+import 'package:kazumi/services/plugin/cycani_api.dart';
 
 class PluginSiteClient {
   PluginSiteClient._();
@@ -16,6 +17,13 @@ class PluginSiteClient {
     Object? data,
     CancelToken? cancelToken,
   }) async {
+    if (CycaniApi.handlesRule(url)) {
+      if (method.toUpperCase() != 'GET') {
+        throw ArgumentError('次元城内置规则只支持 GET');
+      }
+      return CycaniApi.instance.requestRule(url, queryParameters,
+          cancelToken: cancelToken);
+    }
     try {
       final response = await DioFactory.pluginDio.request<String>(
         url,

@@ -21,6 +21,7 @@ import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/plugin/plugin_import_parser.dart';
+import 'package:kazumi/pages/plugin_editor/cycani_login_page.dart';
 
 class PluginViewPage extends StatefulWidget {
   const PluginViewPage({super.key, required this.controller});
@@ -272,6 +273,13 @@ class _PluginViewPageState extends State<PluginViewPage> {
                                     context.pushNamed('/settings/plugin/shop'),
                                 icon: const Icon(Icons.travel_explore_rounded),
                                 label: const Text('规则仓库')),
+                            if (Platform.isWindows)
+                              FilledButton.tonalIcon(
+                                onPressed: () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(builder: (_) =>
+                                    CycaniLoginPage(plugins: _controller))),
+                                icon: const Icon(Icons.account_circle_outlined),
+                                label: const Text('次元城账号')),
                           ],
                         ),
                         const SizedBox(height: 20),

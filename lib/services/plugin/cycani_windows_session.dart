@@ -53,10 +53,10 @@ class CycaniWindowsSession {
 
   static Future<void> configureEnvironment() async {
     if (!Platform.isWindows) throw StateError('此登录功能目前支持 Windows');
-    final enabled = GStorage.getSetting(SettingsKeys.proxyEnable) as bool;
+    final bool enabled = GStorage.getSetting(SettingsKeys.proxyEnable);
     final proxy = enabled
         ? ProxyUtils.getFormattedProxyUrl(
-            GStorage.getSetting(SettingsKeys.proxyUrl) as String)
+            GStorage.getSetting(SettingsKeys.proxyUrl))
         : null;
     // The existing fork defaults to LocalAppData/flutter_webview_windows/
     // <exe stem>, shared by visible and headless controllers across restarts.

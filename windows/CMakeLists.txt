@@ -57,6 +57,14 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# flutter_inappwebview_windows 0.6.0 uses the legacy MSVC coroutine ABI.
+# New MSVC releases require explicit acknowledgement until the plugin migrates.
+# Apply Microsoft's compatibility definition only to this plugin target.
+if(MSVC AND TARGET flutter_inappwebview_windows_plugin)
+  target_compile_definitions(flutter_inappwebview_windows_plugin PRIVATE
+    _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+endif()
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

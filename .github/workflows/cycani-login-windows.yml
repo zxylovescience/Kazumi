@@ -1,0 +1,36 @@
+name: Build Windows with Cycani login
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cycani-login
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+      - run: flutter pub get
+      - run: flutter test test/cycani_api_test.dart
+      - run: flutter analyze --no-fatal-infos --fatal-warnings
+      - run: flutter test
+      - run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kazumi-Windows-Cycani-Login
+          path: build/windows/x64/runner/Release/
+          if-no-files-found: error
+          retention-days: 7

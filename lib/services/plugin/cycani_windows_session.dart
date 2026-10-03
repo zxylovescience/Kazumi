@@ -2,16 +2,19 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/services.dart';
-import 'package:webview_windows/webview_windows.dart';
+import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
+import 'package:flutter_inappwebview_windows/flutter_inappwebview_windows.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:kazumi/services/network/proxy_utils.dart';
 import 'package:kazumi/services/storage/storage.dart';
 
-/// Shares Kazumi's persistent WebView2 profile; never stores a password.
+/// Uses a dedicated persistent website profile; never stores a password.
 class CycaniWindowsSession {
   CycaniWindowsSession._();
   static final instance = CycaniWindowsSession._();
   static const home = 'https://www.cycani.org/';
+  static const loginUrl = '${home}login';
+  static Future<WindowsWebViewEnvironment>? _environment;
 
   // Only the first-party origin can supply a session. Read the site's current
   // v2 schema, with v1 compatibility, without enumerating unrelated storage.
@@ -51,24 +54,41 @@ class CycaniWindowsSession {
   Future<String?>? _restoring;
   int _epoch = 0;
 
-  static Future<void> configureEnvironment() async {
+  static Future<WindowsWebViewEnvironment> configureEnvironment() async {
+    final pending = _environment;
+    if (pending != null) return pending;
+    final operation = _createEnvironment();
+    _environment = operation;
+    try {
+      return await operation;
+    } catch (_) {
+      _environment = null;
+      rethrow;
+    }
+  }
+
+  static Future<WindowsWebViewEnvironment> _createEnvironment() async {
     if (!Platform.isWindows) throw StateError('此登录功能目前支持 Windows');
+    // Keep scripts and their returned authentication data out of plugin logs.
+    PlatformInAppWebViewController.debugLoggingSettings =
+        DebugLoggingSettings(enabled: false);
+    PlatformInAppBrowser.debugLoggingSettings = DebugLoggingSettings(enabled: false);
+    PlatformWebViewEnvironment.debugLoggingSettings =
+        DebugLoggingSettings(enabled: false);
     final bool enabled = GStorage.getSetting(SettingsKeys.proxyEnable);
     final proxy = enabled
         ? ProxyUtils.getFormattedProxyUrl(
             GStorage.getSetting(SettingsKeys.proxyUrl))
         : null;
-    // The existing fork defaults to LocalAppData/flutter_webview_windows/
-    // <exe stem>, shared by visible and headless controllers across restarts.
-    try {
-      await WebviewController.initializeEnvironment(
-        additionalArguments: proxy == null ? null : '--proxy-server=$proxy',
-      );
-    } on PlatformException catch (error) {
-      // A headless player may have initialized the shared native environment
-      // before WebviewController's Dart-side flag was set. Reuse it.
-      if (error.code != 'environment_already_initialized') rethrow;
-    }
+    final directory = Directory(
+        '${(await getApplicationSupportDirectory()).path}/cycani_webview');
+    await directory.create(recursive: true);
+    return WindowsWebViewEnvironment.static().create(
+      settings: WebViewEnvironmentSettings(
+        userDataFolder: directory.path,
+        additionalBrowserArguments: proxy == null ? null : '--proxy-server=$proxy',
+      ),
+    );
   }
 
   bool accept(Object? result, {int? expectedEpoch}) {
@@ -114,35 +134,50 @@ class CycaniWindowsSession {
 
   Future<String?> _restore() async {
     final epoch = _epoch;
-    await configureEnvironment();
-    final view = HeadlessWebview();
-    StreamSubscription? subscription;
-    var initialized = false;
-    try {
-      await view.run();
-      initialized = true;
-      await view.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);
-      final loaded = Completer<void>();
-      subscription = view.loadingState.listen((state) {
-        if (state == LoadingState.navigationCompleted && !loaded.isCompleted) {
-          loaded.complete();
-        }
-      });
-      await view.loadUrl(home);
-      await loaded.future.timeout(const Duration(seconds: 20));
+    return _withSavedPage((controller) async {
       // The site's app validates/refreshes its own saved session after loading.
       for (var attempt = 0; attempt < 8; attempt++) {
         if (epoch != _epoch) return null;
-        if (accept(await view.executeScript(readScript), expectedEpoch: epoch)) {
+        if (accept(await controller.evaluateJavascript(source: readScript),
+            expectedEpoch: epoch)) {
           return _token;
         }
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
       return null;
+    });
+  }
+
+  static Future<T> _withSavedPage<T>(
+      Future<T> Function(PlatformInAppWebViewController controller) action) async {
+    final environment = await configureEnvironment();
+    final loaded = Completer<void>();
+    final view = WindowsHeadlessInAppWebView(
+      WindowsHeadlessInAppWebViewCreationParams(
+        webViewEnvironment: environment,
+        initialUrlRequest: URLRequest(url: WebUri(home)),
+        onLoadStop: (controller, url) {
+          if (!loaded.isCompleted) loaded.complete();
+        },
+      ),
+    );
+    try {
+      await view.run();
+      await loaded.future.timeout(const Duration(seconds: 20));
+      final controller = view.webViewController;
+      if (controller == null) throw StateError('次元城登录存储尚未就绪');
+      return await action(controller);
     } finally {
-      await subscription?.cancel();
-      if (initialized) await view.dispose();
+      await view.dispose();
     }
+  }
+
+  Future<void> clearSavedSession() async {
+    invalidate();
+    await _withSavedPage((controller) async {
+      final cleared = await controller.evaluateJavascript(source: clearScript);
+      if (cleared != true) throw StateError('无法清除次元城登录存储');
+    });
   }
 
   void invalidate() {
